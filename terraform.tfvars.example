@@ -1,0 +1,24 @@
+aws_region    = "us-east-1"
+name_prefix   = "week10b-wp-rds"
+instance_type = "t3.micro"
+
+# HTTP is open for a simple browser-based lab test.
+# For a narrower rule, replace this with your public IP as x.x.x.x/32.
+http_cidr = "0.0.0.0/0"
+
+# SSH is optional for troubleshooting.
+# Use an existing EC2 key pair from the AWS Academy lab region if needed.
+enable_ssh = true
+key_name   = null
+ssh_cidr   = "0.0.0.0/0"
+
+db_instance_class    = "db.t3.micro"
+db_allocated_storage = 20
+db_name              = "wordpressdb"
+db_master_username   = "wpadmin"
+
+# Do not put db_master_password here.
+# Set it in the shell before terraform plan/apply:
+# export TF_VAR_db_master_password='Use-A-Lab-Only-Password-Here'
+
+wordpress_table_prefix = "wp_"
