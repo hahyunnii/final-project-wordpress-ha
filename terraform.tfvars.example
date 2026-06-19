@@ -1,24 +1,33 @@
 aws_region    = "us-east-1"
-name_prefix   = "week10b-wp-rds"
+name_prefix   = "wp-ha-rds"
 instance_type = "t3.micro"
 
-# HTTP is open for a simple browser-based lab test.
-# For a narrower rule, replace this with your public IP as x.x.x.x/32.
+# HTTP open to all for the lab ALB.
 http_cidr = "0.0.0.0/0"
 
-# SSH is optional for troubleshooting.
-# Use an existing EC2 key pair from the AWS Academy lab region if needed.
+# Enable SSH for troubleshooting; set key_name to an existing EC2 key pair.
 enable_ssh = true
 key_name   = null
 ssh_cidr   = "0.0.0.0/0"
 
+# RDS settings — keep db.t3.micro and 20 GiB for Academy credits.
 db_instance_class    = "db.t3.micro"
 db_allocated_storage = 20
 db_name              = "wordpressdb"
 db_master_username   = "wpadmin"
 
-# Do not put db_master_password here.
+# HA: Multi-AZ creates a synchronous standby in a second AZ.
+# Set false to save credits when Multi-AZ is not being tested.
+rds_multi_az              = true
+rds_backup_retention_days = 1
+
+# Do NOT put db_master_password here.
 # Set it in the shell before terraform plan/apply:
-# export TF_VAR_db_master_password='Use-A-Lab-Only-Password-Here'
+#   export TF_VAR_db_master_password='Use-A-Lab-Only-Password-Here'
 
 wordpress_table_prefix = "wp_"
+
+# ASG sizing — 2 desired instances across 2 AZs for HA web tier.
+asg_min_size         = 1
+asg_max_size         = 3
+asg_desired_capacity = 2
