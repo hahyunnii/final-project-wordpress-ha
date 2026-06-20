@@ -9,40 +9,26 @@ DB_PASSWORD="${db_password}"
 DB_HOST="${db_host}"
 DB_PORT="${db_port}"
 TABLE_PREFIX="${wordpress_table_prefix}"
+ALB_DNS="${alb_dns_name}"
+NAME_PREFIX="${name_prefix}"
 
 dnf upgrade -y
 
 LAMP_PACKAGES=(
-  wget
-  httpd
-  php-fpm
-  php-mysqli
-  php-json
-  php
-  php-devel
+  wget httpd php-fpm php-mysqli php-json php php-devel
+  php-mysqlnd php-gd php-intl php-mbstring php-xml php-zip
+  gzip openssl tar
 )
 
 if ! dnf install -y "$${LAMP_PACKAGES[@]}"; then
-  dnf clean all
-  dnf upgrade -y
-  dnf install -y "$${LAMP_PACKAGES[@]}"
+  dnf clean all && dnf upgrade -y && dnf install -y "$${LAMP_PACKAGES[@]}"
 fi
 
-dnf install -y gzip openssl tar
-dnf install -y mariadb105 || dnf install -y mariadb105-server
+dnf install -y mariadb105 || true
+command -v curl >/dev/null 2>&1 || dnf install -y curl-minimal
 
-if ! command -v curl >/dev/null 2>&1; then
-  dnf install -y curl-minimal
-fi
-
-systemctl start httpd
-systemctl enable httpd
-systemctl is-enabled httpd
-systemctl is-active --quiet httpd
-
-systemctl start php-fpm
-systemctl enable php-fpm
-systemctl is-active --quiet php-fpm
+systemctl enable --now httpd
+systemctl enable --now php-fpm
 
 chown -R ec2-user:apache /var/www
 chmod 2775 /var/www
@@ -53,9 +39,6 @@ cat > /var/www/html/lamp-health.php <<'PHP'
 <?php echo "lamp-ok\n"; ?>
 PHP
 curl -fsS http://127.0.0.1/lamp-health.php
-
-dnf install -y php-mysqlnd
-dnf install -y php-gd php-intl php-mbstring php-xml php-zip || true
 
 rpm -q httpd
 php --version
@@ -76,66 +59,61 @@ metadata() {
 INSTANCE_ID=$(metadata "instance-id")
 AVAILABILITY_ZONE=$(metadata "placement/availability-zone")
 
+echo "Waiting for RDS at $${DB_HOST}:$${DB_PORT} ..."
 for attempt in $(seq 1 60); do
-  if mysql -h "$${DB_HOST}" -P "$${DB_PORT}" -u "$${DB_USER}" -p"$${DB_PASSWORD}" "$${DB_NAME}" -e "SELECT 1;" >/dev/null 2>&1; then
-    echo "RDS connection check passed"
+  if mysql -h "$${DB_HOST}" -P "$${DB_PORT}" -u "$${DB_USER}" -p"$${DB_PASSWORD}" "$${DB_NAME}" \
+       -e "SELECT 1;" >/dev/null 2>&1; then
+    echo "RDS connection check passed (attempt $${attempt})"
     break
   fi
-
   if [ "$${attempt}" -eq 60 ]; then
-    echo "RDS connection check failed after $${attempt} attempts"
+    echo "ERROR: RDS not reachable after $${attempt} attempts"
     exit 1
   fi
-
+  echo "  attempt $${attempt}/60 — sleeping 10s"
   sleep 10
 done
 
 wget https://wordpress.org/latest.tar.gz -O /tmp/latest.tar.gz
 tar -xzf /tmp/latest.tar.gz -C /tmp
-
 rm -rf /var/www/html/*
 cp -r /tmp/wordpress/* /var/www/html/
 cp /var/www/html/wp-config-sample.php /var/www/html/wp-config.php
 
 replace_placeholder() {
-  local key="$1"
-  local value="$2"
-  local escaped
-  escaped=$(printf '%s' "$value" | sed -e 's/[\/&]/\\&/g')
-  sed -i "s|$key|$escaped|g" /var/www/html/wp-config.php
+  local key="$1" value="$2" escaped
+  escaped=$(printf '%s' "$${value}" | sed -e 's/[\/&]/\\&/g')
+  sed -i "s|$${key}|$${escaped}|g" /var/www/html/wp-config.php
 }
 
 replace_placeholder "database_name_here" "$${DB_NAME}"
-replace_placeholder "username_here" "$${DB_USER}"
-replace_placeholder "password_here" "$${DB_PASSWORD}"
-replace_placeholder "localhost" "$${DB_HOST}:$${DB_PORT}"
+replace_placeholder "username_here"      "$${DB_USER}"
+replace_placeholder "password_here"      "$${DB_PASSWORD}"
+replace_placeholder "localhost"          "$${DB_HOST}:$${DB_PORT}"
 sed -i "s/^\$table_prefix = 'wp_';/\$table_prefix = '$${TABLE_PREFIX}';/" /var/www/html/wp-config.php
+
+cat >> /var/www/html/wp-config.php <<PHP
+
+define( 'WP_HOME',    'http://$${ALB_DNS}' );
+define( 'WP_SITEURL', 'http://$${ALB_DNS}' );
+if ( isset( \$_SERVER['HTTP_X_FORWARDED_FOR'] ) ) {
+    \$_SERVER['REMOTE_ADDR'] = explode( ',', \$_SERVER['HTTP_X_FORWARDED_FOR'] )[0];
+}
+PHP
 
 if curl -fsSL https://api.wordpress.org/secret-key/1.1/salt/ -o /tmp/wp-salts.php; then
   awk '
-    FNR == NR {
-      salts = salts $0 "\n"
-      next
-    }
-    /AUTH_KEY/ {
-      printf "%s", salts
-      skip = 1
-      next
-    }
-    /NONCE_SALT/ && skip {
-      skip = 0
-      next
-    }
-    !skip {
-      print
-    }
+    FNR == NR { salts = salts $0 "\n"; next }
+    /AUTH_KEY/ { printf "%s", salts; skip = 1; next }
+    /NONCE_SALT/ && skip { skip = 0; next }
+    !skip { print }
   ' /tmp/wp-salts.php /var/www/html/wp-config.php > /tmp/wp-config.php
   mv /tmp/wp-config.php /var/www/html/wp-config.php
 fi
 
 cat > /var/www/html/health.html <<EOF
 ok
-name_prefix=${name_prefix}
+name_prefix=$${NAME_PREFIX}
 instance_id=$${INSTANCE_ID}
 availability_zone=$${AVAILABILITY_ZONE}
 database_host=$${DB_HOST}
@@ -144,40 +122,33 @@ EOF
 
 cat > /var/www/html/db-health.php <<PHP
 <?php
+\$host = '$${DB_HOST}';
+\$user = '$${DB_USER}';
+\$pass = '$${DB_PASSWORD}';
+\$db   = '$${DB_NAME}';
+\$port = (int)'$${DB_PORT}';
 \$mysqli = mysqli_init();
-if (!\$mysqli) {
-    http_response_code(500);
-    echo "db-error: mysqli_init failed\n";
-    exit;
+if (!\$mysqli) { http_response_code(500); echo "db-error: mysqli_init failed\n"; exit; }
+if (!@\$mysqli->real_connect(\$host, \$user, \$pass, \$db, \$port)) {
+    http_response_code(500); echo "db-error: " . mysqli_connect_error() . "\n"; exit;
 }
-
-if (!@\$mysqli->real_connect('$${DB_HOST}', '$${DB_USER}', '$${DB_PASSWORD}', '$${DB_NAME}', (int) '$${DB_PORT}')) {
-    http_response_code(500);
-    echo "db-error: " . mysqli_connect_error() . "\n";
-    exit;
-}
-
 \$result = \$mysqli->query('SELECT 1 AS ok');
-if (!\$result) {
-    http_response_code(500);
-    echo "db-error: query failed\n";
-    exit;
-}
-
+if (!\$result) { http_response_code(500); echo "db-error: query failed\n"; exit; }
 echo "db-ok\n";
 PHP
 
 cat > /home/ec2-user/rds-connection.txt <<EOF
-RDS connection values for the week-10b WordPress lab.
-Host: $${DB_HOST}
-Port: $${DB_PORT}
+Host:     $${DB_HOST}
+Port:     $${DB_PORT}
 Database: $${DB_NAME}
-User: $${DB_USER}
+User:     $${DB_USER}
+ALB:      $${ALB_DNS}
 EOF
 chown ec2-user:ec2-user /home/ec2-user/rds-connection.txt
 chmod 600 /home/ec2-user/rds-connection.txt
 
-sed -i '/<Directory "\/var\/www\/html">/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' /etc/httpd/conf/httpd.conf
+sed -i '/<Directory "\/var\/www\/html">/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' \
+  /etc/httpd/conf/httpd.conf
 
 chown -R apache:apache /var/www/html
 chmod 2775 /var/www
@@ -190,3 +161,4 @@ systemctl restart php-fpm
 systemctl restart httpd
 systemctl is-enabled httpd
 systemctl is-active --quiet httpd
+echo "Bootstrap complete — $${INSTANCE_ID} in $${AVAILABILITY_ZONE}"
