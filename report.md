@@ -3,8 +3,8 @@
 **Course:** Cloud Computing & AWS  
 **Project:** Semester Final — HA WordPress with S3 Media Offload & CloudWatch Monitoring  
 **Repository:** https://github.com/hahyunnii/final-project-wordpress-ha (branch: `final-project`)  
-**url:** http://wp-final-alb-1657988911.us-east-1.elb.amazonaws.com/
 **Due Date:** June 20, 2026  
+**url:** http://wp-final-alb-1657988911.us-east-1.elb.amazonaws.com/
 
 ---
 
