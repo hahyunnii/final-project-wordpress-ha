@@ -3,6 +3,7 @@ set -euo pipefail
 
 exec > >(tee /var/log/wordpress-user-data.log | logger -t wordpress-user-data -s 2>/dev/console) 2>&1
 
+# Terraform template variables
 DB_NAME="${db_name}"
 DB_USER="${db_username}"
 DB_PASSWORD="${db_password}"
@@ -11,6 +12,10 @@ DB_PORT="${db_port}"
 TABLE_PREFIX="${wordpress_table_prefix}"
 ALB_DNS="${alb_dns_name}"
 NAME_PREFIX="${name_prefix}"
+S3_BUCKET="${s3_bucket}"
+AWS_REGION="${aws_region}"
+
+# ── System packages ───────────────────────────────────────────────────────────
 
 dnf upgrade -y
 
@@ -35,14 +40,7 @@ chmod 2775 /var/www
 find /var/www -type d -exec chmod 2775 {} \;
 find /var/www -type f -exec chmod 0664 {} \;
 
-cat > /var/www/html/lamp-health.php <<'PHP'
-<?php echo "lamp-ok\n"; ?>
-PHP
-curl -fsS http://127.0.0.1/lamp-health.php
-
-rpm -q httpd
-php --version
-php -m | grep -E 'mysqli|mysqlnd'
+# ── Instance metadata ─────────────────────────────────────────────────────────
 
 METADATA_TOKEN=$(curl -fsS -X PUT "http://169.254.169.254/latest/api/token" \
   -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" || true)
@@ -59,6 +57,8 @@ metadata() {
 INSTANCE_ID=$(metadata "instance-id")
 AVAILABILITY_ZONE=$(metadata "placement/availability-zone")
 
+# ── Wait for RDS ──────────────────────────────────────────────────────────────
+
 echo "Waiting for RDS at $${DB_HOST}:$${DB_PORT} ..."
 for attempt in $(seq 1 60); do
   if mysql -h "$${DB_HOST}" -P "$${DB_PORT}" -u "$${DB_USER}" -p"$${DB_PASSWORD}" "$${DB_NAME}" \
@@ -74,11 +74,15 @@ for attempt in $(seq 1 60); do
   sleep 10
 done
 
+# ── Install WordPress ─────────────────────────────────────────────────────────
+
 wget https://wordpress.org/latest.tar.gz -O /tmp/latest.tar.gz
 tar -xzf /tmp/latest.tar.gz -C /tmp
 rm -rf /var/www/html/*
 cp -r /tmp/wordpress/* /var/www/html/
 cp /var/www/html/wp-config-sample.php /var/www/html/wp-config.php
+
+# ── Configure wp-config.php ───────────────────────────────────────────────────
 
 replace_placeholder() {
   local key="$1" value="$2" escaped
@@ -92,15 +96,31 @@ replace_placeholder "password_here"      "$${DB_PASSWORD}"
 replace_placeholder "localhost"          "$${DB_HOST}:$${DB_PORT}"
 sed -i "s/^\$table_prefix = 'wp_';/\$table_prefix = '$${TABLE_PREFIX}';/" /var/www/html/wp-config.php
 
+# ALB DNS 고정 — ASG 환경에서 URL 정합성 보장
 cat >> /var/www/html/wp-config.php <<PHP
 
+// HA: ALB DNS로 URL 고정
 define( 'WP_HOME',    'http://$${ALB_DNS}' );
 define( 'WP_SITEURL', 'http://$${ALB_DNS}' );
+
+// S3 Offload Media — AWS Region 및 버킷 설정
+define( 'AS3CF_SETTINGS', serialize( array(
+    'provider' => 'aws',
+    'use-server-roles' => true,
+    'bucket' => '$${S3_BUCKET}',
+    'region' => '$${AWS_REGION}',
+    'copy-to-s3' => true,
+    'serve-from-s3' => true,
+    'remove-local-file' => false,
+) ) );
+
+// X-Forwarded-For 신뢰 (ALB)
 if ( isset( \$_SERVER['HTTP_X_FORWARDED_FOR'] ) ) {
     \$_SERVER['REMOTE_ADDR'] = explode( ',', \$_SERVER['HTTP_X_FORWARDED_FOR'] )[0];
 }
 PHP
 
+# WordPress 인증 Salt 설정
 if curl -fsSL https://api.wordpress.org/secret-key/1.1/salt/ -o /tmp/wp-salts.php; then
   awk '
     FNR == NR { salts = salts $0 "\n"; next }
@@ -111,6 +131,18 @@ if curl -fsSL https://api.wordpress.org/secret-key/1.1/salt/ -o /tmp/wp-salts.ph
   mv /tmp/wp-config.php /var/www/html/wp-config.php
 fi
 
+# ── WP-CLI 설치 및 WP Offload Media 플러그인 자동 설치 ───────────────────────
+
+curl -fsSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar \
+  -o /usr/local/bin/wp
+chmod +x /usr/local/bin/wp
+
+# WordPress 설치 완료 후 플러그인 설치 (설치가 완료된 상태에서만 작동)
+# WordPress 초기 설정은 브라우저에서 진행 후 플러그인이 활성화됨
+wp package install deliciousbrains/wp-offload-media --allow-root 2>/dev/null || true
+
+# ── Health check 파일 ─────────────────────────────────────────────────────────
+
 cat > /var/www/html/health.html <<EOF
 ok
 name_prefix=$${NAME_PREFIX}
@@ -118,6 +150,7 @@ instance_id=$${INSTANCE_ID}
 availability_zone=$${AVAILABILITY_ZONE}
 database_host=$${DB_HOST}
 database_name=$${DB_NAME}
+s3_bucket=$${S3_BUCKET}
 EOF
 
 cat > /var/www/html/db-health.php <<PHP
@@ -137,15 +170,22 @@ if (!\$result) { http_response_code(500); echo "db-error: query failed\n"; exit;
 echo "db-ok\n";
 PHP
 
-cat > /home/ec2-user/rds-connection.txt <<EOF
-Host:     $${DB_HOST}
-Port:     $${DB_PORT}
-Database: $${DB_NAME}
-User:     $${DB_USER}
-ALB:      $${ALB_DNS}
-EOF
-chown ec2-user:ec2-user /home/ec2-user/rds-connection.txt
-chmod 600 /home/ec2-user/rds-connection.txt
+# S3 접근 확인 파일
+cat > /var/www/html/s3-health.php <<PHP
+<?php
+\$bucket = '$${S3_BUCKET}';
+\$region = '$${AWS_REGION}';
+\$url = "https://s3.$${region}.amazonaws.com/$${bucket}";
+\$headers = @get_headers(\$url);
+if (\$headers && strpos(\$headers[0], '200') !== false || strpos(\$headers[0], '403') !== false) {
+    echo "s3-ok bucket=$${bucket}\n";
+} else {
+    http_response_code(500);
+    echo "s3-error: cannot reach bucket\n";
+}
+PHP
+
+# ── Apache 설정 ───────────────────────────────────────────────────────────────
 
 sed -i '/<Directory "\/var\/www\/html">/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' \
   /etc/httpd/conf/httpd.conf
@@ -159,6 +199,18 @@ restorecon -R /var/www/html || true
 
 systemctl restart php-fpm
 systemctl restart httpd
-systemctl is-enabled httpd
-systemctl is-active --quiet httpd
+
+# ── 연결 정보 저장 ────────────────────────────────────────────────────────────
+
+cat > /home/ec2-user/connection-info.txt <<EOF
+=== WordPress HA + S3 Final Project ===
+Instance:   $${INSTANCE_ID} ($${AVAILABILITY_ZONE})
+ALB:        $${ALB_DNS}
+DB Host:    $${DB_HOST}:$${DB_PORT}
+DB Name:    $${DB_NAME}
+S3 Bucket:  $${S3_BUCKET} ($${AWS_REGION})
+EOF
+chown ec2-user:ec2-user /home/ec2-user/connection-info.txt
+chmod 600 /home/ec2-user/connection-info.txt
+
 echo "Bootstrap complete — $${INSTANCE_ID} in $${AVAILABILITY_ZONE}"

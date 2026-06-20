@@ -1,12 +1,12 @@
 # ── ALB ───────────────────────────────────────────────────────────────────────
 
 output "alb_dns_name" {
-  description = "DNS name of the Application Load Balancer — use this as the WordPress URL"
+  description = "ALB DNS name — WordPress site URL"
   value       = aws_lb.wordpress.dns_name
 }
 
 output "wordpress_url" {
-  description = "WordPress site URL via the ALB"
+  description = "WordPress site URL"
   value       = "http://${aws_lb.wordpress.dns_name}/"
 }
 
@@ -16,7 +16,7 @@ output "health_check_url" {
 }
 
 output "db_check_url" {
-  description = "PHP-to-RDS connectivity check endpoint"
+  description = "PHP → RDS connectivity check"
   value       = "http://${aws_lb.wordpress.dns_name}/db-health.php"
 }
 
@@ -28,20 +28,15 @@ output "asg_name" {
 }
 
 output "launch_template_id" {
-  description = "Launch Template ID used by the ASG"
+  description = "Launch Template ID"
   value       = aws_launch_template.wordpress.id
 }
 
 # ── RDS ───────────────────────────────────────────────────────────────────────
 
 output "rds_endpoint" {
-  description = "RDS MySQL endpoint address (private, VPC-only)"
+  description = "RDS MySQL endpoint (VPC-internal)"
   value       = aws_db_instance.wordpress.address
-}
-
-output "rds_port" {
-  description = "RDS MySQL port"
-  value       = aws_db_instance.wordpress.port
 }
 
 output "rds_instance_id" {
@@ -54,25 +49,49 @@ output "rds_multi_az" {
   value       = aws_db_instance.wordpress.multi_az
 }
 
-output "db_name" {
-  description = "WordPress database name on RDS"
-  value       = var.db_name
+output "rds_port" {
+  description = "RDS MySQL port"
+  value       = aws_db_instance.wordpress.port
 }
 
-output "db_master_username" {
-  description = "RDS master username"
-  value       = var.db_master_username
+# ── S3 ────────────────────────────────────────────────────────────────────────
+
+output "s3_bucket_name" {
+  description = "S3 bucket for WordPress media offload"
+  value       = aws_s3_bucket.wordpress_media.id
+}
+
+output "s3_bucket_arn" {
+  description = "S3 bucket ARN"
+  value       = aws_s3_bucket.wordpress_media.arn
+}
+
+output "s3_bucket_url" {
+  description = "S3 bucket public URL base"
+  value       = "https://${aws_s3_bucket.wordpress_media.bucket_regional_domain_name}"
+}
+
+# ── IAM ───────────────────────────────────────────────────────────────────────
+
+output "ec2_iam_role_name" {
+  description = "IAM role attached to EC2 instances for S3 access"
+  value       = aws_iam_role.wordpress_ec2.name
 }
 
 # ── Networking ────────────────────────────────────────────────────────────────
 
+output "vpc_id" {
+  description = "VPC ID"
+  value       = data.aws_vpc.default.id
+}
+
 output "selected_subnet_ids" {
-  description = "Subnets used by ALB, ASG, and RDS (one per AZ)"
+  description = "Subnets used (one per AZ)"
   value       = local.selected_subnet_ids
 }
 
 output "security_group_ids" {
-  description = "Security group IDs for ALB, WordPress EC2, and RDS"
+  description = "Security group IDs"
   value = {
     alb       = aws_security_group.alb.id
     wordpress = aws_security_group.wordpress.id
@@ -80,19 +99,16 @@ output "security_group_ids" {
   }
 }
 
-output "vpc_id" {
-  description = "VPC ID used by this deployment"
-  value       = data.aws_vpc.default.id
+# ── CloudWatch ────────────────────────────────────────────────────────────────
+
+output "cloudwatch_dashboard_url" {
+  description = "CloudWatch dashboard URL"
+  value       = "https://${var.aws_region}.console.aws.amazon.com/cloudwatch/home?region=${var.aws_region}#dashboards:name=${aws_cloudwatch_dashboard.wordpress.dashboard_name}"
 }
 
 # ── Hints ─────────────────────────────────────────────────────────────────────
 
-output "user_data_log_hint" {
-  description = "Where to find bootstrap logs on any EC2 instance"
-  value       = "sudo tail -f /var/log/wordpress-user-data.log  (SSH into any ASG instance)"
-}
-
-output "asg_instance_refresh_hint" {
-  description = "Command to rolling-replace ASG instances after a config change"
-  value       = "aws autoscaling start-instance-refresh --auto-scaling-group-name ${aws_autoscaling_group.wordpress.name}"
+output "s3_offload_setup_hint" {
+  description = "WordPress 설치 후 S3 Offload Media 플러그인 설정 방법"
+  value       = "WordPress Admin → Plugins → WP Offload Media Lite → Bucket: ${aws_s3_bucket.wordpress_media.id} (IAM Role로 자동 인증)"
 }
