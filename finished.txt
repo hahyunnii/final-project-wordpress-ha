@@ -1,51 +1,78 @@
-Week 12 Lab — RDS-Backed HA WordPress on EC2
-Submitted: June 19, 2026
-Due: June 20, 2026
-Repository: https://github.com/mobile-os-dku-cis-mse/06-ec2-rds-with-terraform-hahyunnii
+Final Project — WordPress HA + S3 on AWS
+Submitted: June 20, 2026
+Due Date:  June 20, 2026
 
+Repository: https://github.com/hahyunnii/final-project-wordpress-ha
+Branch:     final-project
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 COMPLETED ITEMS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-[x] main.tf           — ALB + ASG + Launch Template + RDS Multi-AZ + CloudWatch
-[x] variables.tf      — rds_multi_az, asg_*, rds_backup_retention_days 추가
-[x] outputs.tf        — ALB DNS, ASG name, RDS Multi-AZ status, SG IDs
-[x] versions.tf       — Terraform >= 1.5.0, AWS provider ~> 5.0
-[x] user-data.sh      — WP_HOME/WP_SITEURL = ALB DNS, bash 변수 $${} 이스케이프 수정
-[x] terraform.tfvars.example — HA 기본값 반영
-[x] .gitignore        — terraform.tfstate, plan.out, *.pem 제외
-[x] commands.md       — 실제 실행 결과값으로 작성
-[x] report.md         — 실제 리소스 ID/값 기반 아키텍처 분석
-[x] finished.txt      — 제출 완료 파일
+[x] main.tf              — S3, IAM(LabRole), ALB, ASG, RDS Multi-AZ, CloudWatch
+[x] variables.tf         — s3_force_destroy 등 신규 변수 추가
+[x] outputs.tf           — s3_bucket_name, cloudwatch_dashboard_url 등 추가
+[x] versions.tf          — Terraform >= 1.5.0, AWS provider ~> 5.0
+[x] user-data.sh         — WP_HOME/WP_SITEURL = ALB DNS, bash 변수 $${} 이스케이프
+[x] terraform.tfvars.example — S3 관련 기본값 반영
+[x] .gitignore           — terraform.tfstate, *.pem 제외
+[x] commands.md          — 전체 명령어 로그 (실제 배포값 포함)
+[x] report.md            — 아키텍처 분석, 수업 개념 연결, 벤치마크 결과
+[x] README.md            — 프로젝트 개요, Quick Start, 실제 배포값
+[x] finished.txt         — 제출 완료 파일
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-실제 배포 결과 (AWS Account: 980808829165 / us-east-1)
+WHAT'S NEW vs. ASSIGNMENT 6
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. S3 미디어 Offload
+   - S3 버킷: wp-final-media-980808829165
+   - WP Offload Media Lite 플러그인으로 WordPress 미디어 자동 S3 업로드
+   - IAM Role(LabRole) 인증 — Access Key 불필요
+   - EC2 완전 Stateless 달성
+
+2. CloudWatch 통합 모니터링
+   - Dashboard: wp-final-dashboard (7개 위젯)
+   - EC2 CPU / ALB RequestCount+ResponseTime / ASG Instance Count
+   - RDS CPU+Connections / RDS FreeStorageSpace / ALB HealthyHostCount / S3 ObjectCount
+   - 신규 알람: RDS CPU > 80%, RDS FreeStorage < 2GiB
+
+3. ab 벤치마크 테스트
+   - Baseline (C=10, N=100): 19.65 RPS, 508ms, 0 failed
+   - Load Test (C=40, N=500): 22.15 RPS, 1805ms, 0 failed
+   - CloudWatch Dashboard에서 벤치마크 트래픽 실시간 확인
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REAL DEPLOYMENT VALUES (Account: 980808829165 / us-east-1)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 VPC:              vpc-099a13dbc423e5700
-ALB DNS:          wp-ha-rds-alb-2082097614.us-east-1.elb.amazonaws.com
-ALB ARN:          arn:aws:elasticloadbalancing:us-east-1:980808829165:loadbalancer/app/wp-ha-rds-alb/94c14455c0cbd0ba
-WordPress URL:    http://wp-ha-rds-alb-2082097614.us-east-1.elb.amazonaws.com/
-ASG:              wp-ha-rds-asg (min=1, desired=2, max=3)
-Launch Template:  lt-090a22a836817a026
-EC2 (AZ-a):       i-0d01ae088fcb0f542 / 18.209.221.1  / us-east-1a
-EC2 (AZ-b):       i-07beca60a583fe60d / 18.212.176.211 / us-east-1b
-RDS Identifier:   wp-ha-rds-mysql
-RDS DB ID:        db-A6TLMTZ6PAAVDOCEKLWUFY4EVI
-RDS Endpoint:     wp-ha-rds-mysql.cdc6m8c42ir8.us-east-1.rds.amazonaws.com:3306
-RDS Multi-AZ:     true
+ALB DNS:          wp-final-alb-1657988911.us-east-1.elb.amazonaws.com
+WordPress URL:    http://wp-final-alb-1657988911.us-east-1.elb.amazonaws.com/
+ASG:              wp-final-asg (min=1, desired=2, max=3)
+Launch Template:  lt-079d260e6f4841c88
+EC2 (AZ-a):       i-07b33d926afe269c8 / 44.211.183.147 / us-east-1a
+EC2 (AZ-b):       i-0155d46e46d7633b4 / 34.239.103.143 / us-east-1b
+RDS:              wp-final-mysql / db-VJA4IMTR2S5Q4VWVAGI6KPGT5E
+RDS Endpoint:     wp-final-mysql.cdc6m8c42ir8.us-east-1.rds.amazonaws.com:3306
+RDS Multi-AZ:     true (Standby: us-east-1b)
 RDS Public:       false
-SG (ALB):         sg-0f5b65c7c67426864
-SG (WordPress):   sg-0d655c34f11996faf
-SG (RDS):         sg-01d0cd90b0994177e
-Subnets:          subnet-0b325a3a157bfff42 (us-east-1a), subnet-0907c242196e43f14 (us-east-1b)
+S3 Bucket:        wp-final-media-980808829165
+IAM Role:         LabRole
+CloudWatch:       wp-final-dashboard
+SG (ALB):         sg-0547e2f86c9fd0ff8
+SG (WordPress):   sg-0df92ea4c5d4e45d1
+SG (RDS):         sg-04a8c592eafad89b8
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-검증 결과
+VERIFICATION RESULTS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-health_check_url: ok        (HTTP 200)
-db_check_url:     db-ok     (HTTP 200)
-WordPress 사이트: 정상 동작 확인 (Blog 화면 출력)
-terraform destroy: 완료 — 14개 리소스 전부 삭제
+health_check_url:   ok        (HTTP 200, s3_bucket 정보 포함)
+db_check_url:       db-ok     (HTTP 200)
+EC2 → S3 (IAM):    성공      (aws s3 cp 테스트 확인)
+S3 Offload:         성공      (미디어 파일 S3 URL로 서빙 확인)
+WordPress:          설치 완료 (Admin Dashboard 정상 접속)
+CloudWatch:         정상      (7개 위젯 실시간 데이터 수집)
+Benchmark:          완료      (0 failed requests, Dashboard 연계 확인)
+terraform destroy:  완료      (25개 리소스 전부 삭제)
