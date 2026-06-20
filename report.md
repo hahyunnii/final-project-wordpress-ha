@@ -302,6 +302,41 @@ $ aws s3 ls s3://wp-final-media-980808829165 --recursive
   - File URL: `http://wp-final-media-980808829165.s3.amazonaws.com/...`
   - Access: **Public**
 
+### 8.5 Screenshots
+
+**WordPress Admin Dashboard**
+![WordPress Admin Dashboard](docs/images/wordpress-dashboard.png)
+
+**EC2 Instance — IAM Role: LabRole, ASG: wp-final-asg**
+![EC2 Instance Detail](docs/images/ec2-instance.png)
+
+**Auto Scaling Group — wp-final-asg (min=1, desired=2, max=3, 2개 AZ)**
+![Auto Scaling Group](docs/images/asg-detail.png)
+
+**Application Load Balancer — wp-final-alb (활성, us-east-1a + us-east-1b)**
+![ALB Detail](docs/images/alb-detail.png)
+
+**ALB Target Group — i-07b33d926afe269c8 Healthy**
+![Target Group Healthy](docs/images/target-group-healthy.png)
+
+**RDS MySQL Multi-AZ — publicly_accessible: false, Standby: us-east-1b**
+![RDS Detail](docs/images/rds-detail.png)
+
+**S3 Bucket — wp-final-media-980808829165 (wp-content/ 폴더)**
+![S3 Bucket](docs/images/s3-bucket.png)
+
+**WordPress Media Library — S3 URL로 서빙되는 미디어 파일 목록**
+![WordPress Media Library](docs/images/wordpress-medialibrary.png)
+
+**WP Offload Media — Storage Provider: Amazon S3, Bucket, File URL 확인**
+![Media Library S3 Detail](docs/images/media-library-s3.png)
+
+**CloudWatch Dashboard — 벤치마크 트래픽 실시간 반영 (7개 위젯)**
+![CloudWatch Dashboard](docs/images/cloudwatch-dashboard.png)
+
+**CloudWatch Alarms — RDS CPU > 80%, RDS Storage < 2GiB 경보**
+![CloudWatch Alarms](docs/images/cloudwatch-alarms.png)
+
 ---
 
 ## 9. HA Failure Scenarios
