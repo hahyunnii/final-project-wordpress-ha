@@ -74,8 +74,8 @@ output "s3_bucket_url" {
 # ── IAM ───────────────────────────────────────────────────────────────────────
 
 output "ec2_iam_role_name" {
-  description = "IAM role attached to EC2 instances for S3 access"
-  value       = aws_iam_role.wordpress_ec2.name
+  description = "IAM role attached to EC2 instances for S3 access (AWS Academy LabRole)"
+  value       = data.aws_iam_role.lab_role.name
 }
 
 # ── Networking ────────────────────────────────────────────────────────────────

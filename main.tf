@@ -108,55 +108,16 @@ resource "aws_s3_bucket_cors_configuration" "wordpress_media" {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# IAM — EC2가 S3에 접근하기 위한 Role
+# IAM — AWS Academy LabRole 사용 (IAM Role 생성 권한 없음)
+# LabRole은 S3 접근 권한을 이미 포함하고 있음
 # ──────────────────────────────────────────────────────────────────────────────
 
-resource "aws_iam_role" "wordpress_ec2" {
-  name = "${var.name_prefix}-ec2-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "ec2.amazonaws.com" }
-      Action    = "sts:AssumeRole"
-    }]
-  })
-
-  tags = merge(local.common_tags, { Name = "${var.name_prefix}-ec2-role" })
+data "aws_iam_role" "lab_role" {
+  name = "LabRole"
 }
 
-resource "aws_iam_role_policy" "wordpress_s3" {
-  name = "${var.name_prefix}-s3-policy"
-  role = aws_iam_role.wordpress_ec2.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:PutObject",
-          "s3:GetObject",
-          "s3:DeleteObject",
-          "s3:ListBucket",
-          "s3:GetBucketLocation",
-          "s3:PutObjectAcl",
-        ]
-        Resource = [
-          aws_s3_bucket.wordpress_media.arn,
-          "${aws_s3_bucket.wordpress_media.arn}/*",
-        ]
-      }
-    ]
-  })
-}
-
-resource "aws_iam_instance_profile" "wordpress_ec2" {
-  name = "${var.name_prefix}-ec2-profile"
-  role = aws_iam_role.wordpress_ec2.name
-
-  tags = merge(local.common_tags, { Name = "${var.name_prefix}-ec2-profile" })
+data "aws_iam_instance_profile" "lab_instance_profile" {
+  name = "LabInstanceProfile"
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -333,7 +294,7 @@ resource "aws_launch_template" "wordpress" {
   key_name      = var.key_name
 
   iam_instance_profile {
-    name = aws_iam_instance_profile.wordpress_ec2.name
+    name = data.aws_iam_instance_profile.lab_instance_profile.name
   }
 
   network_interfaces {
