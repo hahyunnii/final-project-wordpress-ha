@@ -476,10 +476,11 @@ resource "aws_cloudwatch_dashboard" "wordpress" {
         width  = 12
         height = 6
         properties = {
-          title  = "EC2 CPU Utilization (ASG)"
-          view   = "timeSeries"
-          period = 60
-          stat   = "Average"
+          title   = "EC2 CPU Utilization (ASG)"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 60
+          stat    = "Average"
           metrics = [
             ["AWS/EC2", "CPUUtilization", "AutoScalingGroupName", aws_autoscaling_group.wordpress.name]
           ]
@@ -498,13 +499,15 @@ resource "aws_cloudwatch_dashboard" "wordpress" {
         width  = 12
         height = 6
         properties = {
-          title  = "ALB Request Count & Response Time"
-          view   = "timeSeries"
-          period = 60
+          title   = "ALB Request Count & Response Time"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 60
           metrics = [
             ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", aws_lb.wordpress.arn_suffix, { stat = "Sum", label = "RequestCount" }],
             ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", aws_lb.wordpress.arn_suffix, { stat = "Average", label = "ResponseTime (avg)", yAxis = "right" }]
           ]
+          annotations = { horizontal = [] }
         }
       },
       {
@@ -514,14 +517,16 @@ resource "aws_cloudwatch_dashboard" "wordpress" {
         width  = 12
         height = 6
         properties = {
-          title  = "ASG Instance Count"
-          view   = "timeSeries"
-          period = 60
-          stat   = "Average"
+          title   = "ASG Instance Count"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 60
+          stat    = "Average"
           metrics = [
             ["AWS/AutoScaling", "GroupDesiredCapacity", "AutoScalingGroupName", aws_autoscaling_group.wordpress.name, { label = "Desired" }],
             ["AWS/AutoScaling", "GroupInServiceInstances", "AutoScalingGroupName", aws_autoscaling_group.wordpress.name, { label = "InService" }]
           ]
+          annotations = { horizontal = [] }
         }
       },
       {
@@ -531,13 +536,15 @@ resource "aws_cloudwatch_dashboard" "wordpress" {
         width  = 12
         height = 6
         properties = {
-          title  = "RDS CPU & DB Connections"
-          view   = "timeSeries"
-          period = 60
+          title   = "RDS CPU & DB Connections"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 60
           metrics = [
             ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", aws_db_instance.wordpress.identifier, { stat = "Average", label = "CPU %" }],
             ["AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", aws_db_instance.wordpress.identifier, { stat = "Average", label = "Connections", yAxis = "right" }]
           ]
+          annotations = { horizontal = [] }
         }
       },
       {
@@ -547,13 +554,15 @@ resource "aws_cloudwatch_dashboard" "wordpress" {
         width  = 12
         height = 6
         properties = {
-          title  = "RDS Free Storage Space"
-          view   = "timeSeries"
-          period = 300
-          stat   = "Average"
+          title   = "RDS Free Storage Space"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 300
+          stat    = "Average"
           metrics = [
             ["AWS/RDS", "FreeStorageSpace", "DBInstanceIdentifier", aws_db_instance.wordpress.identifier]
           ]
+          annotations = { horizontal = [] }
         }
       },
       {
@@ -563,13 +572,15 @@ resource "aws_cloudwatch_dashboard" "wordpress" {
         width  = 12
         height = 6
         properties = {
-          title  = "ALB Healthy Host Count"
-          view   = "timeSeries"
-          period = 60
-          stat   = "Average"
+          title   = "ALB Healthy Host Count"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 60
+          stat    = "Average"
           metrics = [
             ["AWS/ApplicationELB", "HealthyHostCount", "TargetGroup", aws_lb_target_group.wordpress.arn_suffix, "LoadBalancer", aws_lb.wordpress.arn_suffix]
           ]
+          annotations = { horizontal = [] }
         }
       },
       {
@@ -579,13 +590,15 @@ resource "aws_cloudwatch_dashboard" "wordpress" {
         width  = 24
         height = 6
         properties = {
-          title  = "S3 Bucket — Request Metrics"
-          view   = "timeSeries"
-          period = 300
+          title   = "S3 Bucket — Object Count & Size"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 300
           metrics = [
             ["AWS/S3", "NumberOfObjects", "BucketName", aws_s3_bucket.wordpress_media.id, "StorageType", "AllStorageTypes", { stat = "Average", label = "Object Count" }],
             ["AWS/S3", "BucketSizeBytes", "BucketName", aws_s3_bucket.wordpress_media.id, "StorageType", "StandardStorage", { stat = "Average", label = "Bucket Size (bytes)", yAxis = "right" }]
           ]
+          annotations = { horizontal = [] }
         }
       }
     ]
