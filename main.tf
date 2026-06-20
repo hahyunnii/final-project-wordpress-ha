@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# DATA SOURCES  — reuse the default VPC and discover subnets across all AZs
+# DATA SOURCES
 # ──────────────────────────────────────────────────────────────────────────────
 
 data "aws_vpc" "default" {
@@ -18,13 +18,14 @@ data "aws_subnet" "default_vpc" {
   id       = each.value
 }
 
-# Latest Amazon Linux 2023 AMI from AWS-managed SSM parameter.
 data "aws_ssm_parameter" "al2023_ami" {
   name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
 }
 
+data "aws_caller_identity" "current" {}
+
 # ──────────────────────────────────────────────────────────────────────────────
-# LOCALS  — pick two AZs for HA; select one subnet per AZ
+# LOCALS
 # ──────────────────────────────────────────────────────────────────────────────
 
 locals {
@@ -33,7 +34,6 @@ locals {
     subnet.availability_zone => subnet.id...
   }
 
-  # Always use at least 2 AZs for HA (ALB + RDS Multi-AZ requirement)
   selected_azs = slice(sort(keys(local.subnets_by_az)), 0, min(2, length(keys(local.subnets_by_az))))
 
   selected_subnet_ids = [
@@ -41,19 +41,92 @@ locals {
   ]
 
   common_tags = {
-    Course = "cloud-computing-aws"
-    Lab    = "week-12-wordpress-ec2-rds-ha"
+    Course  = "cloud-computing-aws"
+    Project = "final-wordpress-ha-s3"
   }
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# S3 — WordPress 미디어 파일 저장소
+# ──────────────────────────────────────────────────────────────────────────────
+
+resource "aws_s3_bucket" "wordpress_media" {
+  bucket        = "${var.name_prefix}-media-${data.aws_caller_identity.current.account_id}"
+  force_destroy = var.s3_force_destroy
+
+  tags = merge(local.common_tags, { Name = "${var.name_prefix}-media" })
+}
+
+resource "aws_s3_bucket_public_access_block" "wordpress_media" {
+  bucket = aws_s3_bucket.wordpress_media.id
+
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+}
+
+resource "aws_s3_bucket_ownership_controls" "wordpress_media" {
+  bucket = aws_s3_bucket.wordpress_media.id
+
+  rule {
+    object_ownership = "BucketOwnerPreferred"
+  }
+}
+
+resource "aws_s3_bucket_policy" "wordpress_media" {
+  bucket = aws_s3_bucket.wordpress_media.id
+
+  depends_on = [
+    aws_s3_bucket_public_access_block.wordpress_media,
+    aws_s3_bucket_ownership_controls.wordpress_media,
+  ]
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "PublicReadGetObject"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = "s3:GetObject"
+        Resource  = "${aws_s3_bucket.wordpress_media.arn}/*"
+      }
+    ]
+  })
+}
+
+resource "aws_s3_bucket_cors_configuration" "wordpress_media" {
+  bucket = aws_s3_bucket.wordpress_media.id
+
+  cors_rule {
+    allowed_headers = ["*"]
+    allowed_methods = ["GET", "HEAD"]
+    allowed_origins = ["*"]
+    max_age_seconds = 3600
+  }
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# IAM — AWS Academy LabRole 사용 (IAM Role 생성 권한 없음)
+# LabRole은 S3 접근 권한을 이미 포함하고 있음
+# ──────────────────────────────────────────────────────────────────────────────
+
+data "aws_iam_role" "lab_role" {
+  name = "LabRole"
+}
+
+data "aws_iam_instance_profile" "lab_instance_profile" {
+  name = "LabInstanceProfile"
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # SECURITY GROUPS
 # ──────────────────────────────────────────────────────────────────────────────
 
-# ALB Security Group — accepts public HTTP/HTTPS
 resource "aws_security_group" "alb" {
   name        = "${var.name_prefix}-alb-sg"
-  description = "Allow HTTP from the internet to the Application Load Balancer"
+  description = "Allow HTTP from the internet to the ALB"
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
@@ -65,7 +138,6 @@ resource "aws_security_group" "alb" {
   }
 
   egress {
-    description = "Allow all outbound"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -75,10 +147,9 @@ resource "aws_security_group" "alb" {
   tags = merge(local.common_tags, { Name = "${var.name_prefix}-alb-sg" })
 }
 
-# WordPress EC2 Security Group — accepts HTTP only from ALB, optional SSH
 resource "aws_security_group" "wordpress" {
   name        = "${var.name_prefix}-wordpress-sg"
-  description = "Allow HTTP from ALB and optional SSH for troubleshooting"
+  description = "Allow HTTP from ALB and optional SSH"
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
@@ -92,7 +163,7 @@ resource "aws_security_group" "wordpress" {
   dynamic "ingress" {
     for_each = var.enable_ssh ? [1] : []
     content {
-      description = "Optional SSH for troubleshooting"
+      description = "SSH for troubleshooting"
       from_port   = 22
       to_port     = 22
       protocol    = "tcp"
@@ -101,7 +172,6 @@ resource "aws_security_group" "wordpress" {
   }
 
   egress {
-    description = "Allow outbound for package downloads and RDS access"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -111,14 +181,13 @@ resource "aws_security_group" "wordpress" {
   tags = merge(local.common_tags, { Name = "${var.name_prefix}-wordpress-sg" })
 }
 
-# RDS Security Group — accepts MySQL only from WordPress EC2 SG
 resource "aws_security_group" "rds" {
   name        = "${var.name_prefix}-rds-sg"
-  description = "Allow MySQL from WordPress EC2 security group only"
+  description = "Allow MySQL from WordPress EC2 SG only"
   vpc_id      = data.aws_vpc.default.id
 
   ingress {
-    description     = "MySQL from WordPress EC2 instances"
+    description     = "MySQL from WordPress EC2"
     from_port       = 3306
     to_port         = 3306
     protocol        = "tcp"
@@ -126,7 +195,6 @@ resource "aws_security_group" "rds" {
   }
 
   egress {
-    description = "Allow outbound responses"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -137,7 +205,7 @@ resource "aws_security_group" "rds" {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# RDS  — MySQL with Multi-AZ for HA database tier
+# RDS — MySQL Multi-AZ
 # ──────────────────────────────────────────────────────────────────────────────
 
 resource "aws_db_subnet_group" "wordpress" {
@@ -160,10 +228,7 @@ resource "aws_db_instance" "wordpress" {
   db_subnet_group_name   = aws_db_subnet_group.wordpress.name
   vpc_security_group_ids = [aws_security_group.rds.id]
 
-  # HA: Multi-AZ creates a synchronous standby replica in a second AZ.
-  # Automatic failover promotes the standby if the primary fails.
-  multi_az = var.rds_multi_az
-
+  multi_az                = var.rds_multi_az
   publicly_accessible     = false
   storage_type            = "gp2"
   skip_final_snapshot     = true
@@ -175,7 +240,7 @@ resource "aws_db_instance" "wordpress" {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# APPLICATION LOAD BALANCER
+# ALB
 # ──────────────────────────────────────────────────────────────────────────────
 
 resource "aws_lb" "wordpress" {
@@ -219,7 +284,7 @@ resource "aws_lb_listener" "http" {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# LAUNCH TEMPLATE  — used by the Auto Scaling Group
+# LAUNCH TEMPLATE + ASG
 # ──────────────────────────────────────────────────────────────────────────────
 
 resource "aws_launch_template" "wordpress" {
@@ -227,6 +292,10 @@ resource "aws_launch_template" "wordpress" {
   image_id      = data.aws_ssm_parameter.al2023_ami.value
   instance_type = var.instance_type
   key_name      = var.key_name
+
+  iam_instance_profile {
+    name = data.aws_iam_instance_profile.lab_instance_profile.name
+  }
 
   network_interfaces {
     associate_public_ip_address = true
@@ -242,6 +311,8 @@ resource "aws_launch_template" "wordpress" {
     db_port                = aws_db_instance.wordpress.port
     wordpress_table_prefix = var.wordpress_table_prefix
     alb_dns_name           = aws_lb.wordpress.dns_name
+    s3_bucket              = aws_s3_bucket.wordpress_media.id
+    aws_region             = var.aws_region
   }))
 
   tag_specifications {
@@ -253,10 +324,6 @@ resource "aws_launch_template" "wordpress" {
     create_before_destroy = true
   }
 }
-
-# ──────────────────────────────────────────────────────────────────────────────
-# AUTO SCALING GROUP  — HA web tier across 2 AZs
-# ──────────────────────────────────────────────────────────────────────────────
 
 resource "aws_autoscaling_group" "wordpress" {
   name                = "${var.name_prefix}-asg"
@@ -290,7 +357,7 @@ resource "aws_autoscaling_group" "wordpress" {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
-# AUTO SCALING POLICIES  — scale out when CPU > 70%, scale in when CPU < 30%
+# AUTO SCALING POLICIES
 # ──────────────────────────────────────────────────────────────────────────────
 
 resource "aws_autoscaling_policy" "scale_out" {
@@ -301,6 +368,18 @@ resource "aws_autoscaling_policy" "scale_out" {
   cooldown               = 300
 }
 
+resource "aws_autoscaling_policy" "scale_in" {
+  name                   = "${var.name_prefix}-scale-in"
+  autoscaling_group_name = aws_autoscaling_group.wordpress.name
+  adjustment_type        = "ChangeInCapacity"
+  scaling_adjustment     = -1
+  cooldown               = 300
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CLOUDWATCH — EC2 CPU Alarms
+# ──────────────────────────────────────────────────────────────────────────────
+
 resource "aws_cloudwatch_metric_alarm" "cpu_high" {
   alarm_name          = "${var.name_prefix}-cpu-high"
   comparison_operator = "GreaterThanThreshold"
@@ -310,20 +389,12 @@ resource "aws_cloudwatch_metric_alarm" "cpu_high" {
   period              = 120
   statistic           = "Average"
   threshold           = 70
-  alarm_description   = "Scale out when average CPU > 70% for 4 minutes"
+  alarm_description   = "Scale out when CPU > 70% for 4 minutes"
   alarm_actions       = [aws_autoscaling_policy.scale_out.arn]
 
   dimensions = {
     AutoScalingGroupName = aws_autoscaling_group.wordpress.name
   }
-}
-
-resource "aws_autoscaling_policy" "scale_in" {
-  name                   = "${var.name_prefix}-scale-in"
-  autoscaling_group_name = aws_autoscaling_group.wordpress.name
-  adjustment_type        = "ChangeInCapacity"
-  scaling_adjustment     = -1
-  cooldown               = 300
 }
 
 resource "aws_cloudwatch_metric_alarm" "cpu_low" {
@@ -335,10 +406,201 @@ resource "aws_cloudwatch_metric_alarm" "cpu_low" {
   period              = 120
   statistic           = "Average"
   threshold           = 30
-  alarm_description   = "Scale in when average CPU < 30% for 4 minutes"
+  alarm_description   = "Scale in when CPU < 30% for 4 minutes"
   alarm_actions       = [aws_autoscaling_policy.scale_in.arn]
 
   dimensions = {
     AutoScalingGroupName = aws_autoscaling_group.wordpress.name
   }
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CLOUDWATCH — RDS Alarms
+# ──────────────────────────────────────────────────────────────────────────────
+
+resource "aws_cloudwatch_metric_alarm" "rds_cpu_high" {
+  alarm_name          = "${var.name_prefix}-rds-cpu-high"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/RDS"
+  period              = 120
+  statistic           = "Average"
+  threshold           = 80
+  alarm_description   = "RDS CPU > 80% — investigate slow queries"
+
+  dimensions = {
+    DBInstanceIdentifier = aws_db_instance.wordpress.identifier
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "rds_storage_low" {
+  alarm_name          = "${var.name_prefix}-rds-storage-low"
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "FreeStorageSpace"
+  namespace           = "AWS/RDS"
+  period              = 300
+  statistic           = "Average"
+  threshold           = 2147483648 # 2 GiB in bytes
+  alarm_description   = "RDS free storage < 2 GiB"
+
+  dimensions = {
+    DBInstanceIdentifier = aws_db_instance.wordpress.identifier
+  }
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CLOUDWATCH — Dashboard
+# ──────────────────────────────────────────────────────────────────────────────
+
+resource "aws_cloudwatch_dashboard" "wordpress" {
+  dashboard_name = "${var.name_prefix}-dashboard"
+
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        type   = "text"
+        x      = 0
+        y      = 0
+        width  = 24
+        height = 1
+        properties = {
+          markdown = "# WordPress HA + S3 — Final Project Dashboard"
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 1
+        width  = 12
+        height = 6
+        properties = {
+          title   = "EC2 CPU Utilization (ASG)"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 60
+          stat    = "Average"
+          metrics = [
+            ["AWS/EC2", "CPUUtilization", "AutoScalingGroupName", aws_autoscaling_group.wordpress.name]
+          ]
+          annotations = {
+            horizontal = [
+              { label = "Scale-out threshold", value = 70, color = "#ff6961" },
+              { label = "Scale-in threshold", value = 30, color = "#77dd77" }
+            ]
+          }
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 1
+        width  = 12
+        height = 6
+        properties = {
+          title   = "ALB Request Count & Response Time"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 60
+          metrics = [
+            ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", aws_lb.wordpress.arn_suffix, { stat = "Sum", label = "RequestCount" }],
+            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", aws_lb.wordpress.arn_suffix, { stat = "Average", label = "ResponseTime (avg)", yAxis = "right" }]
+          ]
+          annotations = { horizontal = [] }
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 7
+        width  = 12
+        height = 6
+        properties = {
+          title   = "ASG Instance Count"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 60
+          stat    = "Average"
+          metrics = [
+            ["AWS/AutoScaling", "GroupDesiredCapacity", "AutoScalingGroupName", aws_autoscaling_group.wordpress.name, { label = "Desired" }],
+            ["AWS/AutoScaling", "GroupInServiceInstances", "AutoScalingGroupName", aws_autoscaling_group.wordpress.name, { label = "InService" }]
+          ]
+          annotations = { horizontal = [] }
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 7
+        width  = 12
+        height = 6
+        properties = {
+          title   = "RDS CPU & DB Connections"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 60
+          metrics = [
+            ["AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", aws_db_instance.wordpress.identifier, { stat = "Average", label = "CPU %" }],
+            ["AWS/RDS", "DatabaseConnections", "DBInstanceIdentifier", aws_db_instance.wordpress.identifier, { stat = "Average", label = "Connections", yAxis = "right" }]
+          ]
+          annotations = { horizontal = [] }
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 13
+        width  = 12
+        height = 6
+        properties = {
+          title   = "RDS Free Storage Space"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 300
+          stat    = "Average"
+          metrics = [
+            ["AWS/RDS", "FreeStorageSpace", "DBInstanceIdentifier", aws_db_instance.wordpress.identifier]
+          ]
+          annotations = { horizontal = [] }
+        }
+      },
+      {
+        type   = "metric"
+        x      = 12
+        y      = 13
+        width  = 12
+        height = 6
+        properties = {
+          title   = "ALB Healthy Host Count"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 60
+          stat    = "Average"
+          metrics = [
+            ["AWS/ApplicationELB", "HealthyHostCount", "TargetGroup", aws_lb_target_group.wordpress.arn_suffix, "LoadBalancer", aws_lb.wordpress.arn_suffix]
+          ]
+          annotations = { horizontal = [] }
+        }
+      },
+      {
+        type   = "metric"
+        x      = 0
+        y      = 19
+        width  = 24
+        height = 6
+        properties = {
+          title   = "S3 Bucket — Object Count & Size"
+          view    = "timeSeries"
+          region  = var.aws_region
+          period  = 300
+          metrics = [
+            ["AWS/S3", "NumberOfObjects", "BucketName", aws_s3_bucket.wordpress_media.id, "StorageType", "AllStorageTypes", { stat = "Average", label = "Object Count" }],
+            ["AWS/S3", "BucketSizeBytes", "BucketName", aws_s3_bucket.wordpress_media.id, "StorageType", "StandardStorage", { stat = "Average", label = "Bucket Size (bytes)", yAxis = "right" }]
+          ]
+          annotations = { horizontal = [] }
+        }
+      }
+    ]
+  })
 }

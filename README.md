@@ -1,242 +1,121 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/nkKvRrRF)
-# Week 10B Bridge Lab: WordPress on One EC2 Instance with RDS
+# Final Project — WordPress HA + S3 on AWS
 
-This lab keeps the WordPress installation flow from `week-09-prelab-wordpress-terraform`, but moves the database from local MariaDB on the EC2 instance to RDS MySQL.
-It is intended as a bridge between the `week-10-lab-cloudwatch-autoscaling` ALB/ASG lab and the `week-11-rds` migration lab.
+> **Cloud Computing & AWS — Semester Final Project**
 
-## Learning Objectives
+Assignment 6(EC2 + RDS + ALB + ASG)을 베이스라인으로, **S3 미디어 Offload**, **CloudWatch 통합 모니터링**, **ab 벤치마크 테스트**를 추가하여 수업 Week 1~12의 모든 개념을 하나의 HA WordPress 서비스로 통합 구현하였다.
 
-- Create one WordPress EC2 instance and one RDS MySQL instance with Terraform.
-- Allow browser traffic to the EC2 instance over public HTTP `80`.
-- Keep RDS private and allow MySQL `3306` only from the WordPress EC2 security group.
-- Replace the week-09 local MariaDB bootstrap step with an RDS connection.
-- Verify that WordPress tables created during initial setup are stored in RDS.
-- Understand why the next migration lab moves an existing local WordPress database into RDS.
-
-## Created Resources
-
-- 1 EC2 WordPress instance
-- 1 RDS MySQL DB instance
-- 1 RDS DB subnet group
-- 1 WordPress EC2 security group
-- 1 RDS security group
+---
 
 ## Architecture
 
-Traffic flow:
+```
+Internet
+   │ HTTP/80
+   ▼
+[ALB: wp-final-alb]          ← sg-alb (0.0.0.0/0 → 80)
+   │
+   ├── [EC2: us-east-1a]  ─┐
+   └── [EC2: us-east-1b]  ─┤  ASG (min=1, desired=2, max=3)
+                            │  IAM Role: LabRole → S3 접근
+                            ▼ MySQL/3306
+                     [RDS MySQL 8.0 Multi-AZ]
+                     publicly_accessible = false
 
-- Browser -> EC2 public HTTP `80`
-- EC2 WordPress -> RDS private MySQL `3306`
+[S3: wp-final-media-980808829165]
+  ← WordPress 미디어 자동 Offload (WP Offload Media Lite)
+  ← IAM Role 인증 (Access Key 불필요)
 
-The RDS security group allows MySQL access only from the WordPress EC2 security group.
-The RDS instance is created with `publicly_accessible = false`.
-
-## Difference From Week 09
-
-Week 09 installs Apache, PHP, MariaDB, and WordPress on a single EC2 instance.
-This lab still installs Apache, PHP, and WordPress on EC2, but it does not run the database server on EC2.
-Instead, Terraform creates an RDS MySQL instance and the EC2 bootstrap script configures `wp-config.php` to use the RDS endpoint.
-
-The default RDS database name is `wordpressdb`.
-Unlike the week-09 local database name `wordpress-db`, this lab avoids hyphens because RDS MySQL `db_name` is easier to handle with letters, numbers, and underscores only.
-
-## RDS Settings Added After Week 09
-
-Week 09 only needs one subnet and one EC2 security group because the database runs inside the same EC2 instance.
-This lab adds several RDS-specific settings because the database becomes a separate managed resource inside the VPC.
-
-### Default VPC Subnet Selection
-
-RDS uses a DB subnet group instead of a single EC2 subnet.
-The Terraform code reads the default VPC subnets, groups them by Availability Zone, and selects one subnet from two Availability Zones:
-
-- `data.aws_subnet.default_vpc`: loads details for each default VPC subnet
-- `local.subnets_by_az`: groups subnet IDs by Availability Zone
-- `local.selected_subnet_ids`: chooses the subnets used by RDS
-- `local.selected_web_subnet_id`: chooses one of those subnets for the WordPress EC2 instance
-
-Beginner takeaway: EC2 can launch in one subnet, but RDS needs a DB subnet group so AWS knows which VPC subnets the database service may use.
-
-### DB Subnet Group
-
-`aws_db_subnet_group.wordpress` is new in this lab.
-It connects the RDS instance to the selected default VPC subnets:
-
-```hcl
-resource "aws_db_subnet_group" "wordpress" {
-  name       = "${var.name_prefix}-db-subnets"
-  subnet_ids = local.selected_subnet_ids
-}
+[CloudWatch Dashboard: wp-final-dashboard]
+  ← EC2 / ALB / ASG / RDS / S3 실시간 모니터링 (7개 위젯)
 ```
 
-This does not make RDS public.
-It only tells RDS where it can place database network interfaces inside the VPC.
+---
 
-### RDS Security Group
+## What's New vs. Assignment 6
 
-Week 09 opens HTTP directly to the EC2 instance.
-This lab keeps that EC2 HTTP rule, then adds a separate RDS security group:
+| 항목 | Assignment 6 | Final Project |
+|---|---|---|
+| 미디어 저장소 | EC2 로컬 디스크 | **S3 버킷 (자동 Offload)** |
+| EC2 Stateless | ❌ | ✅ |
+| IAM Role | 없음 | **LabRole** |
+| CloudWatch | CPU 알람 2개 | **Dashboard 7위젯 + RDS 알람 2개** |
+| Benchmarking | 없음 | **ab 부하 테스트** |
+| 총 리소스 | 14개 | **25개** |
+| 수업 커버리지 | Week 5~12 | **Week 1~12 전체** |
 
-```hcl
-resource "aws_security_group" "rds" {
-  ingress {
-    from_port       = 3306
-    to_port         = 3306
-    protocol        = "tcp"
-    security_groups = [aws_security_group.wordpress.id]
-  }
-}
-```
+---
 
-The important part is `security_groups = [aws_security_group.wordpress.id]`.
-It means MySQL is reachable only from network interfaces that use the WordPress EC2 security group.
-The RDS MySQL port is not opened to `0.0.0.0/0`.
+## Concepts from Class
 
-### RDS DB Instance
+| Week | 수업 내용 | 적용 |
+|---|---|---|
+| 1~2 | Cloud 개념, S3, EC2, IAM | S3 버킷, EC2, LabRole |
+| 3~4 | S3 접근 제어, Bucket Policy | S3 Public Read, CORS |
+| 5~6 | EC2 + ALB, AWS CLI | ALB 분산, CLI 검증 |
+| 7 | Terraform IaC | 25개 리소스 코드화 |
+| 8 | Benchmarking (ab) | C=10/C=40 부하 테스트 |
+| 9~10 | CloudWatch + ASG | Dashboard + CPU 자동 확장 |
+| 11~12 | RDS | MySQL Multi-AZ |
 
-`aws_db_instance.wordpress` creates the managed MySQL database.
-These settings are new compared with Week 09:
-
-| Setting | Value in this lab | Why it exists |
-| --- | --- | --- |
-| `engine` | `mysql` | Runs MySQL as a managed RDS engine |
-| `instance_class` | `var.db_instance_class` | Chooses DB compute size, default `db.t3.micro` |
-| `allocated_storage` | `var.db_allocated_storage` | Chooses DB storage size, default 20 GiB |
-| `db_name` | `var.db_name` | Creates the initial WordPress database |
-| `username` / `password` | Terraform variables | Creates the DB login WordPress uses |
-| `db_subnet_group_name` | `aws_db_subnet_group.wordpress.name` | Places RDS in selected VPC subnets |
-| `vpc_security_group_ids` | RDS security group | Controls who can reach MySQL `3306` |
-| `publicly_accessible` | `false` | Keeps the database off the public internet |
-| `skip_final_snapshot` | `true` | Makes lab cleanup simpler; not a production default |
-| `backup_retention_period` | `0` | Disables automated backups for a short lab |
-| `deletion_protection` | `false` | Allows `terraform destroy` to remove the DB |
-
-The last three settings are lab conveniences.
-For a real database, you would normally keep backups, consider final snapshots, and use deletion protection.
-
-### WordPress EC2 Bootstrap Changes
-
-Week 09 installs and starts `mariadb105-server` on the EC2 instance.
-This lab does not run a database server on EC2.
-Instead, `user_data` receives RDS connection values from Terraform:
-
-```hcl
-user_data = templatefile("${path.module}/user-data.sh", {
-  db_name     = var.db_name
-  db_username = var.db_master_username
-  db_password = var.db_master_password
-  db_host     = aws_db_instance.wordpress.address
-  db_port     = aws_db_instance.wordpress.port
-})
-```
-
-The bootstrap script then:
-
-- installs Apache, PHP, WordPress, and a MySQL/MariaDB client
-- waits until RDS accepts a `SELECT 1` query
-- writes the RDS endpoint into `wp-config.php`
-- creates `/db-health.php` so students can verify PHP-to-RDS connectivity
-
-### New Variables and Outputs
-
-The RDS variables are also new compared with Week 09:
-
-- `db_instance_class`
-- `db_allocated_storage`
-- `db_name`
-- `db_master_username`
-- `db_master_password`
-
-The RDS-related outputs help students verify the deployment:
-
-- `db_check_url`
-- `rds_endpoint`
-- `rds_port`
-- `rds_instance_id`
-- `db_name`
-- `db_master_username`
-- `selected_subnet_ids`
-- `security_group_ids`
-
-## Password Handling
-
-Do not put the RDS password in `terraform.tfvars`.
-Set it as an environment variable before running Terraform:
-
-```bash
-export TF_VAR_db_master_password='Use-A-Lab-Only-Password-Here'
-```
-
-Note: Terraform still stores the RDS password in Terraform state as a sensitive value.
-This lab's `.gitignore` excludes state files, but the local state file should still be treated as sensitive.
+---
 
 ## Quick Start
 
 ```bash
-cd eng/toy-examples/week-10b-wordpress-ec2-rds
+# 1. 환경변수 설정
+export TF_VAR_db_master_password='Your-Password-Here'
 
-# AWS Academy Learner Lab temporary credentials
-export AWS_ACCESS_KEY_ID="<access-key-id>"
-export AWS_SECRET_ACCESS_KEY="<secret-access-key>"
-export AWS_SESSION_TOKEN="<session-token>"
-
-# Keep the RDS password out of terraform.tfvars.
-export TF_VAR_db_master_password='Use-A-Lab-Only-Password-Here'
-
+# 2. tfvars 생성
 cp terraform.tfvars.example terraform.tfvars
 
+# 3. 배포 (약 15분 소요 — RDS Multi-AZ 생성)
 terraform init
-terraform fmt
-terraform validate
 terraform plan -out plan.out
 terraform apply plan.out
 
+# 4. 출력값 확인
 terraform output
-curl "$(terraform output -raw health_check_url)"
-curl "$(terraform output -raw db_check_url)"
-```
 
-Open the WordPress initial setup page in a browser:
-
-```bash
-terraform output -raw wordpress_url
-```
-
-## Verification Points
-
-Check the RDS instance:
-
-```bash
-aws rds describe-db-instances \
-  --db-instance-identifier "$(terraform output -raw rds_instance_id)" \
-  --query 'DBInstances[0].{Status:DBInstanceStatus,Endpoint:Endpoint.Address,Public:PubliclyAccessible,Engine:Engine}'
-```
-
-The RDS security group should not allow `0.0.0.0/0` on MySQL `3306`.
-It should use the WordPress EC2 security group as the source.
-
-```bash
-aws ec2 describe-security-groups \
-  --group-ids "$(terraform output -json security_group_ids | jq -r '.rds')" \
-  --query 'SecurityGroups[0].IpPermissions'
-```
-
-No EC2 IAM role is required for this RDS connection.
-This beginner lab uses MySQL username/password authentication plus security group rules.
-
-## AWS Academy Notes
-
-- Keep AWS credentials in environment variables only.
-- `AWS_SESSION_TOKEN` is required in AWS Academy Learner Lab.
-- RDS creation can take longer than EC2 creation.
-- Start small with `db.t3.micro` and 20 GiB storage.
-- RDS can incur cost, so run `terraform destroy` after the lab.
-- `skip_final_snapshot = true` means the database is deleted when the lab is destroyed.
-
-## Cleanup
-
-```bash
+# 5. 정리
 terraform destroy
 ```
 
-After cleanup, check the AWS Console and confirm that no EC2 or RDS instances from this lab remain.
+---
+
+## Deliverables
+
+| 파일 | 내용 |
+|---|---|
+| `main.tf` | 전체 인프라 (S3, IAM, ALB, ASG, RDS, CloudWatch) |
+| `variables.tf` | 설정값 |
+| `outputs.tf` | 배포 결과 출력 |
+| `versions.tf` | Provider 버전 고정 |
+| `user-data.sh` | EC2 bootstrap (WordPress + WP_HOME/WP_SITEURL 설정) |
+| `terraform.tfvars.example` | 설정 예시 (비밀번호 제외) |
+| `commands.md` | 실행 명령어 로그 (실제값 포함) |
+| `report.md` | 아키텍처 분석 및 수업 개념 연결 |
+
+---
+
+## Real Deployment Values
+
+| Resource | Value |
+|---|---|
+| ALB DNS | `wp-final-alb-1657988911.us-east-1.elb.amazonaws.com` |
+| WordPress URL | `http://wp-final-alb-1657988911.us-east-1.elb.amazonaws.com/` |
+| RDS Endpoint | `wp-final-mysql.cdc6m8c42ir8.us-east-1.rds.amazonaws.com` |
+| S3 Bucket | `wp-final-media-980808829165` |
+| CloudWatch Dashboard | `wp-final-dashboard` |
+| EC2 AZ-a | `i-07b33d926afe269c8` / `us-east-1a` |
+| EC2 AZ-b | `i-0155d46e46d7633b4` / `us-east-1b` |
+
+---
+
+## Benchmark Results
+
+| Metric | Baseline (C=10, N=100) | Load (C=40, N=500) |
+|---|---|---|
+| Requests/sec | 19.65 | 22.15 |
+| 평균 응답시간 | 508 ms | 1,805 ms |
+| p95 응답시간 | 650 ms | 2,282 ms |
+| Failed requests | **0** | **0** |

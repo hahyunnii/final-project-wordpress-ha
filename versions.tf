@@ -10,7 +10,5 @@ terraform {
 }
 
 provider "aws" {
-  # AWS Academy temporary credentials are read from environment variables.
-  # Never put access keys or session tokens in Terraform files.
   region = var.aws_region
 }
